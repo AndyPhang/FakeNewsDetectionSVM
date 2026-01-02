@@ -24,13 +24,18 @@ except Exception:
 
 # --- 2. GITHUB HELPERS ---
 def get_github_file(path):
-    # New Auth method
     auth = Auth.Token(st.secrets["GITHUB_TOKEN"])
     g = Github(auth=auth)
-    
     repo = g.get_repo(st.secrets["REPO_NAME"])
+    
     file_content = repo.get_contents(path)
-    return file_content, file_content.decoded_content
+    # Use decoded_content which handles the base64 automatically
+    content_bytes = file_content.decoded_content
+    
+    if content_bytes is None:
+        raise ValueError(f"The file at {path} is empty or unreachable.")
+        
+    return file_content, content_bytes
 
 def update_github_file(path, new_content_df, commit_msg):
     # New Auth method
@@ -51,14 +56,26 @@ def clean_input(text):
     return text
 
 def retrain_and_deploy(category):
-    """Retrains using data pulled from GitHub."""
+    """Retrains using data pulled from GitHub with fixed encoding handling."""
     with st.spinner(f"Retraining {category}..."):
         try:
-            _, content = get_github_file(f"dataset/{category.lower()}.csv")
-            df = pd.read_csv(io.BytesIO(content)).dropna()
+            # 1. Get raw bytes from GitHub
+            _, content_bytes = get_github_file(f"dataset/{category.lower()}.csv")
             
+            # 2. Convert bytes to string using utf-8 specifically
+            content_str = content_bytes.decode('utf-8')
+            
+            # 3. Load into Pandas
+            df = pd.read_csv(io.StringIO(content_str)).dropna()
+            
+            if df.empty:
+                st.error(f"Dataset for {category} is empty after dropping NaNs.")
+                return False
+            
+            # --- Training Logic ---
             tfidf = TfidfVectorizer(max_features=4000, stop_words='english', ngram_range=(1, 3))
-            X_tfidf = tfidf.fit_transform(df['text'].values.astype('U'))
+            # Ensure text column is treated as strings
+            X_tfidf = tfidf.fit_transform(df['text'].astype(str))
             y = df['label']
             
             selector = SelectKBest(chi2, k=min(1200, X_tfidf.shape[1]))
@@ -70,12 +87,14 @@ def retrain_and_deploy(category):
             model = SVC(kernel='rbf', C=1.5, gamma='scale', class_weight='balanced', probability=True)
             model.fit(X_scaled, y)
             
+            # Save locally
             if not os.path.exists("models"): os.makedirs("models")
             model_pack = {'vectorizer': tfidf, 'selector': selector, 'scaler': scaler, 'model': model}
             joblib.dump(model_pack, f"models/{category.lower()}_svm.pkl")
             return True
+            
         except Exception as e:
-            st.error(f"Retrain Error: {e}")
+            st.error(f"Retrain Error for {category}: {e}")
             return False
 
 # --- 4. APP UI ---
