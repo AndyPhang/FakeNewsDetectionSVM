@@ -24,18 +24,25 @@ except Exception:
 
 # --- 2. GITHUB HELPERS ---
 def get_github_file(path):
-    g = Github(GITHUB_TOKEN)
-    repo = g.get_repo(REPO_NAME)
+    # New Auth method
+    auth = Auth.Token(st.secrets["GITHUB_TOKEN"])
+    g = Github(auth=auth)
+    
+    repo = g.get_repo(st.secrets["REPO_NAME"])
     file_content = repo.get_contents(path)
     return file_content, file_content.decoded_content
 
 def update_github_file(path, new_content_df, commit_msg):
-    g = Github(GITHUB_TOKEN)
-    repo = g.get_repo(REPO_NAME)
+    # New Auth method
+    auth = Auth.Token(st.secrets["GITHUB_TOKEN"])
+    g = Github(auth=auth)
+    
+    repo = g.get_repo(st.secrets["REPO_NAME"])
     file_content = repo.get_contents(path)
+    
+    # Convert DF to CSV string
     csv_string = new_content_df.to_csv(index=False)
     repo.update_file(path, commit_msg, csv_string, file_content.sha)
-
 # --- 3. CORE FUNCTIONS ---
 def clean_input(text):
     text = str(text).lower()
