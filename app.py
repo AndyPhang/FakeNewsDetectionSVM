@@ -5,7 +5,7 @@ import os
 import io
 import re
 import string
-from github import Github 
+from github import Github, Auth
 from sklearn.svm import SVC
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import MaxAbsScaler
