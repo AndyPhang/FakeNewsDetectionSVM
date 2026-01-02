@@ -29,11 +29,11 @@ def get_github_file(path):
     repo = g.get_repo(st.secrets["REPO_NAME"])
     
     file_content = repo.get_contents(path)
-    # Use decoded_content which handles the base64 automatically
     content_bytes = file_content.decoded_content
     
-    if content_bytes is None:
-        raise ValueError(f"The file at {path} is empty or unreachable.")
+    if content_bytes is None or len(content_bytes) == 0:
+        # Prevents "unsupported encoding: none" by ensuring we don't return empty data
+        raise ValueError(f"The file at {path} is empty. Ensure it has headers (text,category,label).")
         
     return file_content, content_bytes
 
@@ -56,26 +56,25 @@ def clean_input(text):
     return text
 
 def retrain_and_deploy(category):
-    """Retrains using data pulled from GitHub with fixed encoding handling."""
+    """Retrains using data pulled from GitHub with explicit string decoding."""
     with st.spinner(f"Retraining {category}..."):
         try:
-            # 1. Get raw bytes from GitHub
+            # 1. Get raw bytes
             _, content_bytes = get_github_file(f"dataset/{category.lower()}.csv")
             
-            # 2. Convert bytes to string using utf-8 specifically
+            # 2. Force UTF-8 decoding to string before passing to Pandas
             content_str = content_bytes.decode('utf-8')
             
-            # 3. Load into Pandas
+            # 3. Load via io.StringIO (much safer than BytesIO for CSV text data)
             df = pd.read_csv(io.StringIO(content_str)).dropna()
             
-            if df.empty:
-                st.error(f"Dataset for {category} is empty after dropping NaNs.")
+            if df.empty or len(df) < 5:
+                st.error(f"Dataset for {category} is too small to train.")
                 return False
             
-            # --- Training Logic ---
+            # --- SVM Training Pipeline ---
             tfidf = TfidfVectorizer(max_features=4000, stop_words='english', ngram_range=(1, 3))
-            # Ensure text column is treated as strings
-            X_tfidf = tfidf.fit_transform(df['text'].astype(str))
+            X_tfidf = tfidf.fit_transform(df['text'].values.astype('U')) # Force to Unicode
             y = df['label']
             
             selector = SelectKBest(chi2, k=min(1200, X_tfidf.shape[1]))
@@ -87,7 +86,7 @@ def retrain_and_deploy(category):
             model = SVC(kernel='rbf', C=1.5, gamma='scale', class_weight='balanced', probability=True)
             model.fit(X_scaled, y)
             
-            # Save locally
+            # Save locally in the ephemeral /models folder
             if not os.path.exists("models"): os.makedirs("models")
             model_pack = {'vectorizer': tfidf, 'selector': selector, 'scaler': scaler, 'model': model}
             joblib.dump(model_pack, f"models/{category.lower()}_svm.pkl")
