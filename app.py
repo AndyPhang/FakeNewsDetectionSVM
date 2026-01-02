@@ -38,15 +38,17 @@ def get_github_file(path):
     return file_content, content_bytes
 
 def update_github_file(path, new_content_df, commit_msg):
-    # New Auth method
     auth = Auth.Token(st.secrets["GITHUB_TOKEN"])
     g = Github(auth=auth)
-    
     repo = g.get_repo(st.secrets["REPO_NAME"])
+    
+    # Get the latest version of the file to get the correct SHA
     file_content = repo.get_contents(path)
     
-    # Convert DF to CSV string
-    csv_string = new_content_df.to_csv(index=False)
+    # Convert DataFrame to a clean CSV string (forcing UTF-8)
+    csv_string = new_content_df.to_csv(index=False, encoding='utf-8')
+    
+    # Push back to GitHub
     repo.update_file(path, commit_msg, csv_string, file_content.sha)
 # --- 3. CORE FUNCTIONS ---
 def clean_input(text):
@@ -141,49 +143,104 @@ with tab2:
     st.header("Human-in-the-Loop Review")
     admin_pwd = st.sidebar.text_input("Password", type="password")
     
+    # --- INSIDE TAB 2: ADMIN ---
     if admin_pwd == "admin123":
-        # Load review queue
         try:
-            file_obj, content = get_github_file("dataset/admin_review.csv")
-            review_df = pd.read_csv(io.BytesIO(content))
+            # Load review queue
+            file_obj, content_bytes = get_github_file("dataset/admin_review.csv")
+            review_df = pd.read_csv(io.StringIO(content_bytes.decode('utf-8')))
             
             if not review_df.empty:
                 st.write(f"Items Pending: {len(review_df)}")
-                curr = review_df.iloc[0] # Defined only when needed
+                curr = review_df.iloc[0]
                 st.code(curr['text'])
                 
                 c1, c2 = st.columns(2)
+                
+                # --- ACTION: CONFIRM REAL ---
                 if c1.button("✅ Label REAL"):
-                    # 1. Update Category CSV
                     cat_path = f"dataset/{curr['category']}.csv"
-                    _, cat_content = get_github_file(cat_path)
-                    df = pd.read_csv(io.BytesIO(cat_content))
-                    new_row = pd.DataFrame([[curr['text'], curr['category'], 1]], columns=['text', 'category', 'label'])
-                    update_github_file(cat_path, pd.concat([df, new_row], ignore_index=True), "Admin: Verified REAL")
                     
-                    # 2. Remove from Queue
-                    update_github_file("dataset/admin_review.csv", review_df.drop(0), "Resolved Item")
-                    st.success("Synced! Reloading...")
+                    # 1. Pull current category data
+                    _, cat_bytes = get_github_file(cat_path)
+                    cat_df = pd.read_csv(io.StringIO(cat_bytes.decode('utf-8')))
+                    
+                    # 2. Append the new verified row
+                    new_row = pd.DataFrame([[curr['text'], curr['category'], 1]], 
+                                        columns=['text', 'category', 'label'])
+                    updated_cat_df = pd.concat([cat_df, new_row], ignore_index=True)
+                    
+                    # 3. Push category update
+                    update_github_file(cat_path, updated_cat_df, f"Collective Intelligence: {curr['category']} REAL")
+                    
+                    # 4. Remove from queue and push queue update
+                    remaining_queue = review_df.drop(0)
+                    update_github_file("dataset/admin_review.csv", remaining_queue, "Resolved item")
+                    
+                    st.success(f"Successfully modified {cat_path}!")
                     st.rerun()
 
+                # --- ACTION: CONFIRM FAKE ---
                 if c2.button("❌ Label FAKE"):
                     cat_path = f"dataset/{curr['category']}.csv"
-                    _, cat_content = get_github_file(cat_path)
-                    df = pd.read_csv(io.BytesIO(cat_content))
-                    new_row = pd.DataFrame([[curr['text'], curr['category'], 0]], columns=['text', 'category', 'label'])
-                    update_github_file(cat_path, pd.concat([df, new_row], ignore_index=True), "Admin: Verified FAKE")
+                    _, cat_bytes = get_github_file(cat_path)
+                    cat_df = pd.read_csv(io.StringIO(cat_bytes.decode('utf-8')))
                     
-                    update_github_file("dataset/admin_review.csv", review_df.drop(0), "Resolved Item")
-                    st.success("Synced! Reloading...")
+                    new_row = pd.DataFrame([[curr['text'], curr['category'], 0]], 
+                                        columns=['text', 'category', 'label'])
+                    updated_cat_df = pd.concat([cat_df, new_row], ignore_index=True)
+                    
+                    update_github_file(cat_path, updated_cat_df, f"Collective Intelligence: {curr['category']} FAKE")
+                    update_github_file("dataset/admin_review.csv", review_df.drop(0), "Resolved item")
+                    
+                    st.success(f"Successfully modified {cat_path}!")
                     st.rerun()
             else:
-                st.write("No items to review.")
-                
-            st.divider()
-            if st.button("🚀 RETRAIN ALL FROM GITHUB"):
-                for c in categories:
-                    retrain_and_deploy(c)
-                st.success("All models updated!")
-                
+                st.info("Queue is empty.")
         except Exception as e:
-            st.error(f"GitHub Queue Error: {e}")
+            st.error(f"Modification Error: {e}")
+            # Load review queue
+            try:
+                file_obj, content = get_github_file("dataset/admin_review.csv")
+                review_df = pd.read_csv(io.BytesIO(content))
+                
+                if not review_df.empty:
+                    st.write(f"Items Pending: {len(review_df)}")
+                    curr = review_df.iloc[0] # Defined only when needed
+                    st.code(curr['text'])
+                    
+                    c1, c2 = st.columns(2)
+                    if c1.button("✅ Label REAL"):
+                        # 1. Update Category CSV
+                        cat_path = f"dataset/{curr['category']}.csv"
+                        _, cat_content = get_github_file(cat_path)
+                        df = pd.read_csv(io.BytesIO(cat_content))
+                        new_row = pd.DataFrame([[curr['text'], curr['category'], 1]], columns=['text', 'category', 'label'])
+                        update_github_file(cat_path, pd.concat([df, new_row], ignore_index=True), "Admin: Verified REAL")
+                        
+                        # 2. Remove from Queue
+                        update_github_file("dataset/admin_review.csv", review_df.drop(0), "Resolved Item")
+                        st.success("Synced! Reloading...")
+                        st.rerun()
+
+                    if c2.button("❌ Label FAKE"):
+                        cat_path = f"dataset/{curr['category']}.csv"
+                        _, cat_content = get_github_file(cat_path)
+                        df = pd.read_csv(io.BytesIO(cat_content))
+                        new_row = pd.DataFrame([[curr['text'], curr['category'], 0]], columns=['text', 'category', 'label'])
+                        update_github_file(cat_path, pd.concat([df, new_row], ignore_index=True), "Admin: Verified FAKE")
+                        
+                        update_github_file("dataset/admin_review.csv", review_df.drop(0), "Resolved Item")
+                        st.success("Synced! Reloading...")
+                        st.rerun()
+                else:
+                    st.write("No items to review.")
+                    
+                st.divider()
+                if st.button("🚀 RETRAIN ALL FROM GITHUB"):
+                    for c in categories:
+                        retrain_and_deploy(c)
+                    st.success("All models updated!")
+                    
+            except Exception as e:
+                st.error(f"GitHub Queue Error: {e}")
