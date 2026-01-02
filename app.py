@@ -31,9 +31,9 @@ def get_github_file(path):
     file_content = repo.get_contents(path)
     content_bytes = file_content.decoded_content
     
+    # Check if file has data
     if content_bytes is None or len(content_bytes) == 0:
-        # Prevents "unsupported encoding: none" by ensuring we don't return empty data
-        raise ValueError(f"The file at {path} is empty. Ensure it has headers (text,category,label).")
+        raise ValueError(f"The file at {path} is empty or contains no headers.")
         
     return file_content, content_bytes
 
@@ -56,23 +56,23 @@ def clean_input(text):
     return text
 
 def retrain_and_deploy(category):
-    """Retrains using data pulled from GitHub with explicit string decoding."""
+    """Retrains using data pulled from GitHub with explicit UTF-8 decoding."""
     with st.spinner(f"Retraining {category}..."):
         try:
-            # 1. Get raw bytes
+            # 1. Get raw bytes from GitHub
             _, content_bytes = get_github_file(f"dataset/{category.lower()}.csv")
             
-            # 2. Force UTF-8 decoding to string before passing to Pandas
+            # 2. FIX: Explicitly decode bytes to string
             content_str = content_bytes.decode('utf-8')
             
-            # 3. Load via io.StringIO (much safer than BytesIO for CSV text data)
+            # 3. FIX: Use io.StringIO instead of BytesIO for text data
             df = pd.read_csv(io.StringIO(content_str)).dropna()
             
-            if df.empty or len(df) < 5:
-                st.error(f"Dataset for {category} is too small to train.")
+            if df.empty:
+                st.error(f"Dataset for {category} is empty.")
                 return False
             
-            # --- SVM Training Pipeline ---
+            # --- Training Logic ---
             tfidf = TfidfVectorizer(max_features=4000, stop_words='english', ngram_range=(1, 3))
             X_tfidf = tfidf.fit_transform(df['text'].values.astype('U')) # Force to Unicode
             y = df['label']
@@ -86,7 +86,7 @@ def retrain_and_deploy(category):
             model = SVC(kernel='rbf', C=1.5, gamma='scale', class_weight='balanced', probability=True)
             model.fit(X_scaled, y)
             
-            # Save locally in the ephemeral /models folder
+            # Save locally (ephemeral)
             if not os.path.exists("models"): os.makedirs("models")
             model_pack = {'vectorizer': tfidf, 'selector': selector, 'scaler': scaler, 'model': model}
             joblib.dump(model_pack, f"models/{category.lower()}_svm.pkl")
